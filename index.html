@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Front Room</title>
+<!--
+  Half clock, half weather. One file, no build, no API key.
+  Weather from Open-Meteo (free, no key). Written in plain ES5 so it runs on
+  old Fire tablets / Silk.
+
+  Setup: open it, pick a city. Settings are saved on the device.
+  Tap the city name at any time to change city / units / 12-24h.
+  Optional URL overrides: ?lat=41.88&lon=-87.63&name=Chicago&units=f&clock=12
+-->
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #0b0f14; color: #e8edf2;
+    font-family: Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #app { display: -webkit-flex; display: flex; height: 100%; }
+  .half {
+    -webkit-flex: 1; flex: 1; min-width: 0; min-height: 0;
+    display: -webkit-flex; display: flex;
+    -webkit-flex-direction: column; flex-direction: column;
+    -webkit-justify-content: center; justify-content: center;
+    -webkit-align-items: center; align-items: center;
+    box-sizing: border-box; padding: 3vmin; text-align: center;
+  }
+  #clock { border-right: 1px solid #1c2530; }
+  .dim { color: #8a97a6; }
+
+  /* ---- clock (landscape: each half is 50vw wide) ---- */
+  #time { font-size: 15vw; font-weight: 300; line-height: 1; letter-spacing: -0.02em; white-space: nowrap; }
+  #ampm { font-size: 3.2vw; font-weight: 400; margin-left: 0.4vw; color: #8a97a6; }
+  #date { font-size: 3.6vw; margin-top: 2vh; }
+
+  /* ---- weather ---- */
+  #place { font-size: 2.4vw; color: #8a97a6; padding: 1vh 2vw; cursor: pointer; }
+  #now { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }
+  #nowIcon svg { width: 13vw; height: 13vw; display: block; }
+  #temp { font-size: 11vw; font-weight: 300; line-height: 1; margin-left: 1vw; }
+  #cond { font-size: 3vw; margin-top: 0.5vh; }
+  #details { font-size: 2vw; margin-top: 1.5vh; line-height: 1.5; }
+  #details b { color: #e8edf2; font-weight: 400; }
+  #days { display: -webkit-flex; display: flex; margin-top: 3vh; width: 100%; -webkit-justify-content: space-around; justify-content: space-around; }
+  .day { font-size: 2vw; }
+  .day svg { width: 5.5vw; height: 5.5vw; display: block; margin: 0.5vh auto; }
+  .day .pop { color: #6fb3ff; font-size: 1.6vw; min-height: 1.6vw; }
+  #status { font-size: 1.5vw; color: #56626f; margin-top: 2vh; min-height: 1.5vw; }
+  #status.stale { color: #e0a340; }
+
+  /* ---- portrait: stack top/bottom, each half is 100vw wide x 50vh tall ---- */
+  @media (orientation: portrait) {
+    #app { -webkit-flex-direction: column; flex-direction: column; }
+    #clock { border-right: 0; border-bottom: 1px solid #1c2530; }
+    #time { font-size: 24vw; }
+    #ampm { font-size: 5vw; }
+    #date { font-size: 5.5vw; }
+    #place { font-size: 3.8vw; }
+    #nowIcon svg { width: 18vw; height: 18vw; }
+    #temp { font-size: 16vw; }
+    #cond { font-size: 4.6vw; }
+    #details { font-size: 3.2vw; }
+    .day { font-size: 3.4vw; }
+    .day svg { width: 8vw; height: 8vw; }
+    .day .pop { font-size: 2.8vw; }
+    #status { font-size: 2.4vw; }
+  }
+
+  /* ---- settings overlay ---- */
+  #setup {
+    display: none; position: fixed; left: 0; top: 0; right: 0; bottom: 0;
+    background: #080b0f; overflow-y: auto; z-index: 10;
+    font-size: 20px; padding: 24px; box-sizing: border-box;
+  }
+  #setup.open { display: block; }
+  #setup .box { max-width: 560px; margin: 0 auto; }
+  #setup h2 { font-weight: 400; margin: 0 0 16px; }
+  #setup input[type=text] {
+    font-size: 20px; padding: 10px; width: 100%; box-sizing: border-box;
+    background: #151c24; color: #e8edf2; border: 1px solid #2c3845; border-radius: 6px;
+  }
+  #setup button {
+    font-size: 18px; padding: 10px 16px; margin: 10px 8px 0 0;
+    background: #1f2a36; color: #e8edf2; border: 1px solid #2c3845; border-radius: 6px;
+  }
+  #setup button.on { background: #2d6cdf; border-color: #2d6cdf; }
+  #results div { padding: 12px; border-bottom: 1px solid #1c2530; cursor: pointer; }
+  #results div:active { background: #1f2a36; }
+  #setup .row { margin-top: 20px; }
+  #setupMsg { color: #e0a340; margin-top: 10px; min-height: 24px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="half" id="clock">
+    <div><span id="time">--:--</span><span id="ampm"></span></div>
+    <div id="date" class="dim"></div>
+  </div>
+  <div class="half" id="weather">
+    <div id="place">Tap to set location</div>
+    <div id="now"><div id="nowIcon"></div><div id="temp"></div></div>
+    <div id="cond"></div>
+    <div id="details" class="dim"></div>
+    <div id="days"></div>
+    <div id="status"></div>
+  </div>
+</div>
+
+<div id="setup">
+  <div class="box">
+    <h2>Dashboard settings</h2>
+    <input type="text" id="q" placeholder="City or ZIP, e.g. Denver">
+    <button id="searchBtn">Search</button>
+    <button id="geoBtn">Use this device's location</button>
+    <div id="setupMsg"></div>
+    <div id="results"></div>
+    <div class="row">Temperature:
+      <button data-units="f">°F</button><button data-units="c">°C</button>
+    </div>
+    <div class="row">Clock:
+      <button data-clock="12">12-hour</button><button data-clock="24">24-hour</button>
+    </div>
+    <div class="row"><button id="closeBtn">Done</button></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+                'August', 'September', 'October', 'November', 'December'];
+  var WEATHER_EVERY_MS = 15 * 60 * 1000;
+  var RETRY_MS = 2 * 60 * 1000;
+
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  // ---------- settings ----------
+  var cfg = { lat: null, lon: null, name: '', units: 'f', clock: '12' };
+  try {
+    var saved = JSON.parse(localStorage.getItem('frontroom') || '{}');
+    for (var k in saved) if (saved.hasOwnProperty(k)) cfg[k] = saved[k];
+  } catch (e) {}
+  // URL overrides (handy for bookmarking a fixed setup)
+  location.search.replace(/[?&]([^=&]+)=([^&]*)/g, function (_, key, val) {
+    val = decodeURIComponent(val.replace(/\+/g, ' '));
+    if (key === 'lat' || key === 'lon') cfg[key] = parseFloat(val);
+    else if (key === 'name' || key === 'units' || key === 'clock') cfg[key] = val;
+  });
+  function save() {
+    try { localStorage.setItem('frontroom', JSON.stringify(cfg)); } catch (e) {}
+  }
+
+  // ---------- clock ----------
+  function tick() {
+    var d = new Date();
+    var h = d.getHours(), m = d.getMinutes();
+    if (cfg.clock === '24') {
+      $('time').textContent = pad(h) + ':' + pad(m);
+      $('ampm').textContent = '';
+    } else {
+      $('time').textContent = ((h % 12) || 12) + ':' + pad(m);
+      $('ampm').textContent = h < 12 ? 'AM' : 'PM';
+    }
+    $('date').textContent = DAYS[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
+
+    // Reload once a night to keep a long-running old browser healthy.
+    if (h === 3 && m === 0 && d.getSeconds() < 2 && performance.now() > 120000) location.reload();
+  }
+
+  // ---------- icons (inline SVG; old Android lacks most weather emoji) ----------
+  var CLOUD = 'M18 46H48A10 10 0 0 0 48 26A14 14 0 0 0 22 24A11 11 0 0 0 18 46Z';
+  function sun(t) {
+    var rays = '';
+    for (var i = 0; i < 8; i++) {
+      var a = i * Math.PI / 4, c = Math.cos(a), s = Math.sin(a);
+      rays += '<line x1="' + (32 + 17 * c) + '" y1="' + (32 + 17 * s) + '" x2="' + (32 + 24 * c) +
+              '" y2="' + (32 + 24 * s) + '" stroke="#FFC940" stroke-width="3.5" stroke-linecap="round"/>';
+    }
+    return '<g transform="' + (t || '') + '"><circle cx="32" cy="32" r="12" fill="#FFC940"/>' + rays + '</g>';
+  }
+  function moon(t) {
+    return '<g transform="' + (t || '') + '"><path d="M40 12A20 20 0 1 0 52 44A16 16 0 1 1 40 12Z" fill="#E6E1C5"/></g>';
+  }
+  function cloud(t, fill) {
+    return '<path transform="' + (t || '') + '" d="' + CLOUD + '" fill="' + (fill || '#CBD5E1') + '"/>';
+  }
+  function drops(n, color) {
+    var out = '', xs = n === 2 ? [26, 40] : [22, 32, 42];
+    for (var i = 0; i < xs.length; i++) {
+      out += '<line x1="' + xs[i] + '" y1="46" x2="' + (xs[i] - 4) + '" y2="58" stroke="' + color +
+             '" stroke-width="3.5" stroke-linecap="round"/>';
+    }
+    return out;
+  }
+  function flakes() {
+    return '<circle cx="22" cy="50" r="3" fill="#fff"/><circle cx="32" cy="56" r="3" fill="#fff"/>' +
+           '<circle cx="42" cy="50" r="3" fill="#fff"/>';
+  }
+  var UP = 'translate(0,-8)';
+  function iconFor(code, isDay) {
+    var body, orb = isDay ? sun : moon;
+    if (code === 0) body = orb();
+    else if (code === 1) body = orb('translate(-6,-6)') + cloud('translate(10,14) scale(.7)');
+    else if (code === 2) body = orb('translate(-8,-8) scale(.9)') + cloud('translate(4,6) scale(.9)');
+    else if (code === 3) body = cloud('translate(0,-2)');
+    else if (code === 45 || code === 48) body = cloud(UP) +
+      '<g stroke="#8a97a6" stroke-width="3.5" stroke-linecap="round"><line x1="14" y1="48" x2="50" y2="48"/><line x1="20" y1="56" x2="46" y2="56"/></g>';
+    else if (code >= 51 && code <= 57) body = cloud(UP) + drops(2, '#6fb3ff');
+    else if (code >= 61 && code <= 67) body = cloud(UP, '#9aa7b6') + drops(3, '#6fb3ff');
+    else if (code >= 80 && code <= 82) body = orb('translate(-8,-12) scale(.8)') + cloud(UP) + drops(3, '#6fb3ff');
+    else if ((code >= 71 && code <= 77) || code === 85 || code === 86) body = cloud(UP) + flakes();
+    else if (code >= 95) body = cloud(UP, '#7d8896') +
+      '<polygon points="34,40 24,52 31,52 27,62 40,48 33,48 37,40" fill="#FFC940"/>';
+    else body = cloud();
+    return '<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">' + body + '</svg>';
+  }
+  function describe(code) {
+    var map = {
+      0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Cloudy', 45: 'Fog', 48: 'Freezing fog',
+      51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle', 56: 'Freezing drizzle', 57: 'Freezing drizzle',
+      61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 66: 'Freezing rain', 67: 'Freezing rain',
+      71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 77: 'Snow grains',
+      80: 'Rain showers', 81: 'Rain showers', 82: 'Heavy showers', 85: 'Snow showers', 86: 'Heavy snow showers',
+      95: 'Thunderstorms', 96: 'Thunderstorms, hail', 99: 'Thunderstorms, hail'
+    };
+    return map[code] || '';
+  }
+
+  // ---------- weather ----------
+  function getJSON(url, ok, fail) {
+    var x = new XMLHttpRequest();
+    x.open('GET', url, true);
+    x.timeout = 20000;
+    x.onload = function () {
+      if (x.status >= 200 && x.status < 300) {
+        try { ok(JSON.parse(x.responseText)); } catch (e) { fail('bad response'); }
+      } else fail('HTTP ' + x.status);
+    };
+    x.onerror = function () { fail('network error'); };
+    x.ontimeout = function () { fail('timed out'); };
+    x.send();
+  }
+
+  var lastOk = 0, weatherTimer = null;
+  function fmtHour(iso) { // "2026-09-27T06:52" -> "6:52"
+    var h = parseInt(iso.substr(11, 2), 10), m = iso.substr(14, 2);
+    if (cfg.clock === '24') return pad(h) + ':' + m;
+    return ((h % 12) || 12) + ':' + m + (h < 12 ? 'a' : 'p');
+  }
+
+  function loadWeather() {
+    clearTimeout(weatherTimer);
+    if (cfg.lat == null || cfg.lon == null || isNaN(cfg.lat)) { openSetup(); return; }
+    $('place').textContent = cfg.name || (cfg.lat.toFixed(2) + ', ' + cfg.lon.toFixed(2));
+    var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + cfg.lat + '&longitude=' + cfg.lon +
+      '&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day' +
+      '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset' +
+      '&timezone=auto&forecast_days=4' +
+      (cfg.units === 'c' ? '&wind_speed_unit=kmh' : '&temperature_unit=fahrenheit&wind_speed_unit=mph');
+    getJSON(url, function (w) {
+      render(w);
+      lastOk = Date.now();
+      weatherTimer = setTimeout(loadWeather, WEATHER_EVERY_MS);
+    }, function (err) {
+      $('status').textContent = 'Weather update failed (' + err + '), retrying…';
+      weatherTimer = setTimeout(loadWeather, RETRY_MS);
+    });
+  }
+
+  function render(w) {
+    var c = w.current, d = w.daily, r = Math.round;
+    var windUnit = cfg.units === 'c' ? 'km/h' : 'mph';
+    $('nowIcon').innerHTML = iconFor(c.weather_code, c.is_day === 1);
+    $('temp').textContent = r(c.temperature_2m) + '°';
+    $('cond').textContent = describe(c.weather_code);
+    $('details').innerHTML =
+      'High <b>' + r(d.temperature_2m_max[0]) + '°</b> &nbsp;Low <b>' + r(d.temperature_2m_min[0]) + '°</b>' +
+      ' &nbsp;·&nbsp; Feels like <b>' + r(c.apparent_temperature) + '°</b><br>' +
+      'Rain <b>' + (d.precipitation_probability_max[0] || 0) + '%</b>' +
+      ' &nbsp;·&nbsp; Wind <b>' + r(c.wind_speed_10m) + ' ' + windUnit + '</b>' +
+      ' &nbsp;·&nbsp; Humidity <b>' + r(c.relative_humidity_2m) + '%</b><br>' +
+      'Sunrise <b>' + fmtHour(d.sunrise[0]) + '</b> &nbsp;·&nbsp; Sunset <b>' + fmtHour(d.sunset[0]) + '</b>';
+    var html = '';
+    for (var i = 1; i < d.time.length; i++) {
+      var p = d.time[i].split('-'); // parse as a local date, not UTC
+      var day = new Date(+p[0], +p[1] - 1, +p[2]);
+      var pop = d.precipitation_probability_max[i];
+      html += '<div class="day"><div>' + DAYS[day.getDay()].substr(0, 3) + '</div>' +
+        iconFor(d.weather_code[i], true) +
+        '<div>' + r(d.temperature_2m_max[i]) + '° <span class="dim">' + r(d.temperature_2m_min[i]) + '°</span></div>' +
+        '<div class="pop">' + (pop >= 20 ? pop + '% rain' : '') + '</div></div>';
+    }
+    $('days').innerHTML = html;
+    $('status').textContent = '';
+    $('status').className = '';
+  }
+
+  // Warn on screen if the weather hasn't refreshed in a while (e.g. Wi-Fi dropped).
+  function checkStale() {
+    if (!lastOk) return;
+    var mins = Math.floor((Date.now() - lastOk) / 60000);
+    if (mins >= 45) {
+      $('status').className = 'stale';
+      $('status').textContent = 'Weather last updated ' +
+        (mins < 120 ? mins + ' min' : Math.floor(mins / 60) + ' hours') + ' ago';
+    }
+  }
+
+  // ---------- setup screen ----------
+  function openSetup() {
+    $('setup').className = 'open';
+    syncButtons();
+    if (cfg.name) $('q').value = cfg.name.split(',')[0];
+  }
+  function closeSetup() {
+    if (cfg.lat == null) { $('setupMsg').textContent = 'Pick a location first.'; return; }
+    $('setup').className = '';
+    save();
+    tick();
+    loadWeather();
+  }
+  function syncButtons() {
+    var bs = $('setup').getElementsByTagName('button');
+    for (var i = 0; i < bs.length; i++) {
+      var u = bs[i].getAttribute('data-units'), c = bs[i].getAttribute('data-clock');
+      if (u) bs[i].className = u === cfg.units ? 'on' : '';
+      if (c) bs[i].className = c === cfg.clock ? 'on' : '';
+    }
+  }
+  function choose(lat, lon, name) {
+    cfg.lat = lat; cfg.lon = lon; cfg.name = name;
+    $('results').innerHTML = '';
+    $('setupMsg').textContent = '';
+    closeSetup();
+  }
+  function search() {
+    var q = $('q').value.replace(/^\s+|\s+$/g, '');
+    if (!q) return;
+    $('setupMsg').textContent = 'Searching…';
+    $('results').innerHTML = '';
+    var url = 'https://geocoding-api.open-meteo.com/v1/search?count=8&language=en&format=json&name=' +
+              encodeURIComponent(q);
+    getJSON(url, function (data) {
+      var list = data.results || [];
+      $('setupMsg').textContent = list.length ? 'Tap your city:' : 'No matches — try just the city name.';
+      for (var i = 0; i < list.length; i++) (function (p) {
+        var el = document.createElement('div');
+        el.textContent = [p.name, p.admin1, p.country].filter(Boolean).join(', ');
+        el.onclick = function () { choose(p.latitude, p.longitude, p.name + (p.admin1 ? ', ' + p.admin1 : '')); };
+        $('results').appendChild(el);
+      })(list[i]);
+    }, function (err) { $('setupMsg').textContent = 'Search failed (' + err + ').'; });
+  }
+
+  $('place').onclick = openSetup;
+  $('searchBtn').onclick = search;
+  $('q').onkeydown = function (e) { if (e.keyCode === 13) search(); };
+  $('closeBtn').onclick = closeSetup;
+  $('geoBtn').onclick = function () {
+    if (!navigator.geolocation) { $('setupMsg').textContent = 'Location not available on this device.'; return; }
+    $('setupMsg').textContent = 'Finding location…';
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      choose(Math.round(pos.coords.latitude * 100) / 100, Math.round(pos.coords.longitude * 100) / 100, 'Current location');
+    }, function () {
+      $('setupMsg').textContent = 'Could not get location — search for your city instead.';
+    }, { timeout: 15000 });
+  };
+  $('setup').onclick = function (e) {
+    var t = e.target, u = t.getAttribute && t.getAttribute('data-units'), c = t.getAttribute && t.getAttribute('data-clock');
+    if (u) { cfg.units = u; save(); syncButtons(); }
+    if (c) { cfg.clock = c; save(); syncButtons(); }
+  };
+
+  // Ask the browser not to sleep the screen (only newer browsers support this).
+  function keepAwake() {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      navigator.wakeLock.request('screen').then(null, function () {});
+    }
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { keepAwake(); if (Date.now() - lastOk > WEATHER_EVERY_MS) loadWeather(); }
+  });
+
+  // ---------- go ----------
+  tick();
+  setInterval(tick, 1000);
+  setInterval(checkStale, 60000);
+  keepAwake();
+  loadWeather();
+})();
+</script>
+</body>
+</html>
